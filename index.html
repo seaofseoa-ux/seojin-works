@@ -320,16 +320,31 @@ a{ color:inherit; }
   border-radius:30px; padding:10px; background:#fff; box-shadow:0 30px 70px rgba(30,24,50,.35);
 }
 .vm-frame video{ width:100%; height:100%; object-fit:cover; display:block; border-radius:21px; background:#2a2320; }
-.vm-sound,.vm-close{
+.vm-sound,.vm-close,.vm-play{
   width:44px; height:44px; border-radius:50%; display:grid; place-items:center; cursor:pointer; padding:0; color:#fff; font:inherit;
 }
-.vm-sound{ display:none; }   /* the native controls handle sound */
+.vm-sound{ position:absolute; right:22px; bottom:22px; z-index:2; }
+/* custom play bar: play/pause on the left, a thin progress line and elapsed / total time */
+.vm-shade{ position:absolute; left:10px; right:10px; bottom:10px; height:96px; border-radius:0 0 21px 21px; pointer-events:none;
+  background:linear-gradient(to top, rgba(20,16,30,.45), rgba(20,16,30,0)); }
+.vm-play{ position:absolute; left:22px; bottom:22px; z-index:2; }
+.vm-play .pause{ display:none; }
+.vm-play.playing .pause{ display:block; }
+.vm-play.playing .play{ display:none; }
+.vm-bar{ position:absolute; left:76px; right:76px; bottom:22px; height:44px; z-index:2; display:flex; align-items:center; gap:10px; pointer-events:none; }
+.vm-track{ flex:1; height:3px; border-radius:3px; background:rgba(255,255,255,.35); overflow:hidden; }
+.vm-fill{ height:100%; width:0; background:#fff; border-radius:3px; }
+.vm-shade,.vm-play,.vm-bar{ transition:opacity .3s ease; }
+.vm-frame.is-playing .vm-shade,.vm-frame.is-playing .vm-play,.vm-frame.is-playing .vm-bar{ opacity:0; pointer-events:none; }
+.vm-frame.is-playing:has(.vm-play:focus-visible) .vm-play,.vm-frame.is-playing:has(.vm-play:focus-visible) .vm-bar{ opacity:1; }
+.vm-frame video{ cursor:pointer; }
+.vm-time{ color:#fff; font-size:12px; font-weight:500; font-variant-numeric:tabular-nums; white-space:nowrap; text-shadow:0 1px 2px rgba(0,0,0,.35); }
 .vm-close{ position:absolute; top:-14px; right:-14px; color:var(--color-ink); background:linear-gradient(180deg,rgba(255,255,255,.7),rgba(255,255,255,.45)); }
-.vm-sound svg,.vm-close svg{ width:20px; height:20px; }
+.vm-sound svg,.vm-close svg,.vm-play svg{ width:20px; height:20px; }
 .vm-sound .on{ display:none; }
 .vm-sound[aria-pressed="true"] .on{ display:block; }
 .vm-sound[aria-pressed="true"] .off{ display:none; }
-.vm-sound:focus-visible,.vm-close:focus-visible{ outline:2px solid #fff; outline-offset:2px; }
+.vm-sound:focus-visible,.vm-close:focus-visible,.vm-play:focus-visible{ outline:2px solid #fff; outline-offset:2px; }
 .vm-caption{ padding:7px 14px; border-radius:14px; font-size:13px; font-weight:500; margin:0; }
 /* fallback animation when view transitions are not supported */
 .vmodal.fade .vm-backdrop{ animation:vmFade .3s ease both; }
@@ -395,11 +410,17 @@ a{ color:inherit; }
   <div class="vm-backdrop" data-close></div>
   <div class="vm-body">
     <figure class="vm-frame" id="vmFrame">
-      <video id="vmVideo" muted playsinline controls preload="none"></video>
+      <video id="vmVideo" muted playsinline preload="none"></video>
       <button class="vm-sound glass" id="vmSound" type="button" aria-pressed="false" aria-label="Turn sound on">
         <svg class="off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="m22 9-6 6M16 9l6 6"/></svg>
         <svg class="on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg>
       </button>
+      <span class="vm-shade" aria-hidden="true"></span>
+      <button class="vm-play glass" id="vmPlay" type="button" aria-label="Pause">
+        <svg class="play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z"/></svg>
+        <svg class="pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6.5" y="5.5" width="4" height="13" rx="1"/><rect x="13.5" y="5.5" width="4" height="13" rx="1"/></svg>
+      </button>
+      <div class="vm-bar" aria-hidden="true"><div class="vm-track"><div class="vm-fill" id="vmFill"></div></div><span class="vm-time" id="vmTime">0:00 / 0:00</span></div>
       <button class="vm-close glass" type="button" data-close aria-label="Close video">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
       </button>
@@ -740,7 +761,8 @@ function openVideo(icon){
       .finished.finally(() => { vmFrame.style.viewTransitionName = ''; });
   } else { vmodal.classList.add('fade'); show(); }
   try { vmVideo.currentTime = 0; } catch (e) {}
-  if (!reduceMotion.matches) vmVideo.play().catch(() => {}); else vmVideo.controls = true;
+  if (!reduceMotion.matches) vmVideo.play().catch(() => {});
+  syncBar();
 }
 function closeVideo(){
   if (vmodal.hidden) return;
@@ -756,11 +778,29 @@ function closeVideo(){
 }
 vmSound.addEventListener('click', () => { const on = vmVideo.muted; setSound(on); if (on) vmVideo.play().catch(() => {}); });
 vmodal.addEventListener('click', e => { if (e.target.closest('[data-close]')) closeVideo(); });
+/* play bar */
+const vmPlay = document.getElementById('vmPlay'), vmFill = document.getElementById('vmFill'), vmTime = document.getElementById('vmTime');
+const fmt = t => { t = Math.max(0, Math.floor(t || 0)); return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0'); };
+function syncBar(){
+  const d = vmVideo.duration || 0, c = vmVideo.currentTime || 0;
+  vmFill.style.width = d ? (c / d * 100) + '%' : '0';
+  vmTime.textContent = fmt(c) + ' / ' + fmt(d);
+  const playing = !vmVideo.paused && !vmVideo.ended;
+  vmPlay.classList.toggle('playing', playing);
+  vmFrame.classList.toggle('is-playing', playing);   // the play bar hides while the video plays
+  vmPlay.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+}
+['timeupdate','loadedmetadata','play','pause','ended'].forEach(ev => vmVideo.addEventListener(ev, syncBar));
+vmVideo.addEventListener('click', () => { if (!vmVideo.paused && !vmVideo.ended) vmVideo.pause(); else vmPlay.click(); });   // tap the video to pause and bring the bar back
+vmPlay.addEventListener('click', () => {
+  if (vmVideo.paused || vmVideo.ended) { if (vmVideo.ended) vmVideo.currentTime = 0; vmVideo.play().catch(() => {}); }
+  else vmVideo.pause();
+});
 document.addEventListener('keydown', e => {
   if (vmodal.hidden) return;
   if (e.key === 'Escape') { e.preventDefault(); closeVideo(); }
   if (e.key === 'Tab') {   // keep focus inside the dialog
-    const f = [vmVideo, vmodal.querySelector('.vm-close')];
+    const f = [vmPlay, vmSound, vmodal.querySelector('.vm-close')];
     const i = f.indexOf(document.activeElement);
     e.preventDefault(); f[(i + (e.shiftKey ? f.length - 1 : 1)) % f.length].focus();
   }
